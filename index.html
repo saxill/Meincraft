@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meincraft</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; height: 100%; background: #000; }
+  #game { display: block; width: 100%; height: 100%; }
+  * { user-select: none; -webkit-user-select: none; }
+
+  #crosshair {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 20px; height: 20px; pointer-events: none; z-index: 5;
+  }
+  #crosshair::before, #crosshair::after {
+    content: ""; position: absolute; background: rgba(255,255,255,0.85);
+    mix-blend-mode: difference;
+  }
+  #crosshair::before { left: 9px; top: 0; width: 2px; height: 20px; }
+  #crosshair::after  { left: 0; top: 9px; width: 20px; height: 2px; }
+
+  #hotbar {
+    position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+    display: flex; gap: 4px; padding: 4px;
+    background: rgba(0,0,0,0.35); border-radius: 6px; z-index: 5;
+  }
+  .slot {
+    width: 48px; height: 48px; border: 2px solid rgba(255,255,255,0.35);
+    border-radius: 4px; position: relative; box-sizing: border-box;
+    background: rgba(0,0,0,0.25);
+  }
+  .slot.selected { border-color: #fff; box-shadow: 0 0 6px rgba(255,255,255,0.7); }
+  .slot canvas { width: 100%; height: 100%; image-rendering: pixelated; display: block; }
+  .slot .key {
+    position: absolute; left: 3px; top: 1px; color: #fff; font: bold 11px monospace;
+    text-shadow: 1px 1px 0 #000;
+  }
+
+  #overlay {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(10, 15, 30, 0.72); color: #fff;
+    font-family: monospace; text-align: center; cursor: pointer;
+  }
+  #overlay h1 { font-size: 42px; margin: 0 0 8px; letter-spacing: 2px; text-shadow: 3px 3px 0 #2a4d14; color: #9be060; }
+  #overlay p { margin: 4px 0; color: #cfd8e3; font-size: 14px; }
+  #overlay .start { margin-top: 20px; font-size: 18px; color: #fff; animation: pulse 1.4s infinite; }
+  .mp {
+    margin-top: 22px; padding: 12px 16px; cursor: default;
+    background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    justify-content: center;
+  }
+  .mp input, .mp button {
+    font: 13px monospace; padding: 6px 10px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.4); color: #fff;
+  }
+  .mp input {
+    width: 110px;
+    user-select: text; -webkit-user-select: text; /* the global * rule blocks typing */
+    cursor: text;
+  }
+  .mp input::placeholder { color: #8b97a8; }
+  #mp-code { width: 70px; text-transform: uppercase; text-align: center; }
+  .mp button { cursor: pointer; background: #2f5e1f; }
+  .mp button:hover { background: #3d7a29; }
+  .mp button:disabled { background: #333; cursor: default; color: #888; }
+  .mp .mp-sep { color: #8b97a8; font-size: 12px; }
+  #mp-status { width: 100%; min-height: 16px; font-size: 12px; color: #ffd24d; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  #overlay.hidden { display: none; }
+
+  #water-overlay {
+    position: fixed; inset: 0; background: rgba(20, 60, 160, 0.35);
+    pointer-events: none; z-index: 4; display: none;
+  }
+
+  #hud {
+    position: fixed; left: 10px; top: 8px; z-index: 5; color: #fff;
+    font: 12px monospace; text-shadow: 1px 1px 0 #000; pointer-events: none;
+    white-space: pre; opacity: 0.9;
+  }
+
+  #inventory {
+    position: fixed; inset: 0; z-index: 8;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  #inventory.hidden { display: none; }
+  .inv-panel {
+    background: rgba(18, 22, 32, 0.95); border: 2px solid rgba(255,255,255,0.25);
+    border-radius: 8px; padding: 16px 20px 20px; color: #fff;
+    font-family: monospace; text-align: center;
+  }
+  .inv-panel h2 { margin: 0 0 4px; font-size: 18px; letter-spacing: 1px; }
+  .inv-panel p { margin: 0 0 12px; font-size: 12px; color: #9aa6b8; }
+  .inv-grid {
+    display: grid; grid-template-columns: repeat(7, 48px); gap: 6px;
+    justify-content: center;
+  }
+  .inv-grid .slot:hover { cursor: pointer; border-color: #fff; }
+</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="crosshair"></div>
+  <div id="water-overlay"></div>
+  <div id="hud"></div>
+  <div id="hotbar"></div>
+
+  <div id="inventory" class="hidden">
+    <div class="inv-panel">
+      <h2>Blocks</h2>
+      <p>click a block to put it in the selected hotbar slot</p>
+      <div class="inv-grid"></div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <h1>MEINCRAFT</h1>
+    <p>WASD — move &nbsp;·&nbsp; double-tap W — sprint &nbsp;·&nbsp; SPACE — jump / swim up &nbsp;·&nbsp; SHIFT — sneak / fly down</p>
+    <p>LEFT CLICK — break block &nbsp;·&nbsp; RIGHT CLICK — place block &nbsp;·&nbsp; E — inventory</p>
+    <p>1–9 / mouse wheel — select block &nbsp;·&nbsp; F — fly &nbsp;·&nbsp; M — mute &nbsp;·&nbsp; [ ] — view distance &nbsp;·&nbsp; ESC — pause</p>
+    <p>Your world and settings are saved automatically in this browser.</p>
+    <div class="start">▶ click to play</div>
+    <div class="mp" id="mp">
+      <input id="mp-name" maxlength="16" placeholder="your name" autocomplete="off">
+      <button id="mp-host">HOST GAME</button>
+      <span class="mp-sep">or</span>
+      <input id="mp-code" maxlength="5" placeholder="CODE" autocomplete="off">
+      <button id="mp-join">JOIN</button>
+      <div id="mp-status">play with friends: host a room, or join with a friend's code</div>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
