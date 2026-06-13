@@ -139,8 +139,8 @@ function refreshHand() {
   const id = HOTBAR[selected];
   if (isTool(id)) {
     handMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), toolMaterial(id));
-    handMesh.scale.setScalar(0.55);
-    handMesh.rotation.y = 0.4;
+    handMesh.scale.setScalar(0.6);
+    handMesh.rotation.set(0, 0.4, -0.5); // tilt so the head points up-left like a held tool
   } else {
     handMesh = new THREE.Mesh(makeBlockGeometry(id), materials.opaque);
     handMesh.scale.setScalar(0.35);
@@ -580,15 +580,25 @@ function animate() {
     camera.updateProjectionMatrix();
   }
 
-  // Held block swing
+  // Held-item swing: tools sweep a diagonal chop, blocks do a forward punch.
+  // `a` rises 0→1→0 over the swing; `wind` biases the arc so it whips through
+  // the low point rather than easing symmetrically (a meatier mining feel).
+  const usingTool = isTool(HOTBAR[selected]);
   if (swingT > 0) {
     swingT = Math.max(0, swingT - dt);
-    const a = Math.sin((1 - swingT / SWING) * Math.PI);
-    hand.position.y = -0.4 - a * 0.16;
-    hand.rotation.x = 0.15 - a * 0.85;
+    const p = 1 - swingT / SWING;
+    const a = Math.sin(p * Math.PI);
+    const wind = Math.sin(p * Math.PI - 0.6) * 0.5 + 0.5;
+    if (usingTool) {
+      hand.position.set(0.45 - a * 0.12, -0.4 - wind * 0.18, -0.65 + a * 0.12);
+      hand.rotation.set(0.15 - wind * 1.05, -0.55 + a * 0.25, wind * 1.15);
+    } else {
+      hand.position.set(0.45, -0.4 - a * 0.16, -0.65);
+      hand.rotation.set(0.15 - a * 0.85, -0.55, 0);
+    }
   } else {
-    hand.position.y = -0.4;
-    hand.rotation.x = 0.15;
+    hand.position.set(0.45, -0.4, -0.65);
+    hand.rotation.set(0.15, -0.55, 0);
   }
 
   updateChunks();
@@ -624,6 +634,20 @@ function animate() {
     highlight.visible = false;
   }
 
+  // Advance held-mining and show the crack overlay
+  updateMining(dt, hit);
+  if (mining && mining.total > 0) {
+    const stage = clamp(Math.floor((mining.progress / mining.total) * 5), 0, 4);
+    if (crackMat.map !== crackTextures[stage]) {
+      crackMat.map = crackTextures[stage];
+      crackMat.needsUpdate = true;
+    }
+    crackMesh.position.set(mining.x + 0.5, mining.y + 0.5, mining.z + 0.5);
+    crackMesh.visible = true;
+  } else {
+    crackMesh.visible = false;
+  }
+
   // HUD
   fpsFrames++;
   fpsTime += dt;
@@ -638,7 +662,7 @@ function animate() {
       `${fps} fps · ${RENDER_DIST} chunks` +
       `\nxyz ${player.pos.x.toFixed(1)} ${player.pos.y.toFixed(1)} ${player.pos.z.toFixed(1)}` +
       `\n${biome} · ${hh}:${mm}${isMuted() ? ' · muted' : ''}` +
-      `\n${BLOCKS[HOTBAR[selected]].name}${player.flying ? ' · flying' : ''}` +
+      `\n${itemName(HOTBAR[selected])}${player.flying ? ' · flying' : ''}` +
       (net.active
         ? `\nroom ${net.code}${net.hosting ? ' (hosting)' : ''} · ${avatars.count() + 1} players`
         : '');
