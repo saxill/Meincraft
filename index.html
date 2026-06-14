@@ -75,6 +75,10 @@
     position: fixed; inset: 0; background: rgba(20, 60, 160, 0.35);
     pointer-events: none; z-index: 4; display: none;
   }
+  #hurt-overlay {
+    position: fixed; inset: 0; background: rgba(180, 20, 20, 1);
+    pointer-events: none; z-index: 4; opacity: 0;
+  }
 
   #hud {
     position: fixed; left: 10px; top: 8px; z-index: 5; color: #fff;
@@ -100,20 +104,88 @@
     justify-content: center;
   }
   .inv-grid .slot:hover { cursor: pointer; border-color: #fff; }
+
+  /* item counts + tool durability on any slot */
+  .slot .count {
+    position: absolute; right: 3px; bottom: 1px; color: #fff;
+    font: bold 13px monospace; text-shadow: 1px 1px 0 #000; pointer-events: none;
+  }
+  .slot .durabar {
+    position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px;
+    background: rgba(0,0,0,0.7); pointer-events: none;
+  }
+  .slot .durabar > i { display: block; height: 100%; }
+
+  /* health hearts, sits just above the hotbar */
+  #hearts {
+    position: fixed; left: 50%; bottom: 66px; transform: translateX(-50%);
+    z-index: 5; pointer-events: none; image-rendering: pixelated; display: none;
+  }
+
+  /* inventory screen layout */
+  .inv-panel .mode-btn {
+    font: 12px monospace; padding: 5px 12px; border-radius: 4px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.35); background: #2f5e1f; color: #fff;
+    margin-bottom: 12px;
+  }
+  .inv-panel .mode-btn:hover { background: #3d7a29; }
+  .inv-cols { display: flex; gap: 20px; align-items: flex-start; justify-content: center; }
+  .inv-section h3 {
+    margin: 0 0 6px; font-size: 12px; color: #9aa6b8; letter-spacing: 1px; text-align: left;
+  }
+  .inv-rows { display: flex; flex-direction: column; gap: 6px; }
+  .inv-row { display: flex; gap: 6px; justify-content: center; }
+  .inv-row.spacer { margin-top: 6px; }
+  .slot.clickable:hover { cursor: pointer; border-color: #fff; }
+
+  .craft-list {
+    display: flex; flex-direction: column; gap: 4px;
+    width: 210px; max-height: 300px; overflow-y: auto;
+  }
+  .craft-row {
+    display: flex; align-items: center; gap: 8px; padding: 4px 6px;
+    border: 1px solid rgba(255,255,255,0.18); border-radius: 4px;
+    background: rgba(0,0,0,0.25); cursor: pointer; text-align: left;
+  }
+  .craft-row.dim { opacity: 0.4; cursor: default; }
+  .craft-row:not(.dim):hover { border-color: #fff; }
+  .craft-row canvas { width: 34px; height: 34px; image-rendering: pixelated; flex: 0 0 auto; }
+  .craft-row .clabel { font-size: 12px; color: #fff; }
+  .craft-row .creq { font-size: 10px; color: #9aa6b8; }
+
+  .creative-palette {
+    display: grid; grid-template-columns: repeat(8, 44px); gap: 5px;
+    max-height: 300px; overflow-y: auto; justify-content: center;
+  }
+  .creative-palette .slot { width: 44px; height: 44px; }
+
+  #cursor-item {
+    position: fixed; width: 42px; height: 42px; z-index: 20; pointer-events: none;
+    transform: translate(-50%, -50%); image-rendering: pixelated; display: none;
+  }
+  #cursor-item canvas { width: 100%; height: 100%; }
+  #cursor-item .count {
+    position: absolute; right: 0; bottom: -2px; color: #fff;
+    font: bold 13px monospace; text-shadow: 1px 1px 0 #000;
+  }
 </style>
 </head>
 <body>
   <canvas id="game"></canvas>
   <div id="crosshair"></div>
   <div id="water-overlay"></div>
+  <div id="hurt-overlay"></div>
   <div id="hud"></div>
+  <canvas id="hearts" width="220" height="20"></canvas>
   <div id="hotbar"></div>
 
+  <div id="cursor-item"></div>
   <div id="inventory" class="hidden">
     <div class="inv-panel">
-      <h2>Blocks</h2>
-      <p>click a block to put it in the selected hotbar slot</p>
-      <div class="inv-grid"></div>
+      <button class="mode-btn" id="mode-btn">Mode: Survival</button>
+      <h2 id="inv-title">Inventory</h2>
+      <p id="inv-hint">click a stack to pick it up, click again to place it · craft on the left</p>
+      <div id="inv-body"></div>
     </div>
   </div>
 

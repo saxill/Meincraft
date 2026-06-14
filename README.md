@@ -13,7 +13,11 @@ A Minecraft-style voxel game that runs entirely in the browser — no build step
 - **Day/night cycle** with sun, moon, stars, drifting clouds, and dusk glow
 - Water with animated texture, swimming, and an underwater fog tint
 - Break particles and procedural WebAudio sound effects (break, place, footsteps, landing)
-- Block **inventory** (press E) with 21 placeable blocks, plus a held-block in hand with swing animation
+- **Survival mode** (default): break blocks to collect drops into a real stacking inventory, place blocks from your stacks, and **craft** planks, sticks, and tools — toggle **Creative** any time for unlimited blocks
+- **Tools wear out** (durability) and break; the right tool mines its blocks faster
+- **Mobs & combat**: pigs wander by day, zombies spawn at night and chase you; swing a sword to fight back. You have health (hearts), take fall/zombie damage, and respawn on death
+- A real **inventory screen** (press E): click a stack to pick it up, click to place, craft on the left
+- A held item in hand with a swing animation
 - Sprint (double-tap W), sneak (Shift), and fly mode (F)
 - Your block edits, position, time of day, and settings **auto-save** in the browser (localStorage)
 - **Online multiplayer**: host a room and share a 5-letter code — friends join from anywhere, see each other build in a shared world with synced day/night
@@ -40,10 +44,10 @@ only used to introduce peers; gameplay traffic flows browser-to-browser).
 | Double-tap W | Sprint |
 | Space | Jump / swim up / fly up |
 | Shift | Sneak / fly down |
-| Left click | Break block |
-| Right click | Place block |
+| Left click | Break block / hold to mine / attack a mob in front |
+| Right click | Place block (consumes one from the stack in survival) |
 | 1–9 / mouse wheel | Select hotbar slot |
-| E | Open/close inventory |
+| E | Open/close inventory (craft here; switch Survival/Creative) |
 | F | Toggle fly |
 | M | Mute sounds |
 | [ / ] | Decrease / increase view distance |
@@ -79,9 +83,13 @@ js/player.js    physics, collision, swimming, sprint/sneak
 js/sky.js       sun, moon, stars, clouds, day/night lighting
 js/particles.js block-break particle bursts
 js/audio.js     procedural sound effects
-js/ui.js        hotbar and inventory rendering
+js/ui.js        hotbar, inventory screen, crafting list, hearts, creative palette
 js/net.js       multiplayer rooms (WebRTC / PeerJS, host-relayed)
 js/avatars.js   remote player models with name tags
+js/items.js     tools, durability, attack damage, block drops, item icons
+js/inventory.js stacking 36-slot inventory model
+js/crafting.js  shapeless recipes (planks, sticks, tools)
+js/mobs.js      pigs & zombies — physics, AI, combat
 ```
 
 No bundler, no npm — everything is plain ES modules.

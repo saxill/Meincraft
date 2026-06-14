@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { SEED, CHUNK, SEA, REACH, DAY_LENGTH } from './js/config.js';
+import { SEED, CHUNK, SEA, REACH, DAY_LENGTH, WORLD_H } from './js/config.js';
 import { clamp } from './js/noise.js';
 import {
-  AIR, B, BLOCKS, DEFAULT_HOTBAR,
+  AIR, B, BLOCKS,
   buildAtlas, buildWaterTexture, computeTileColors,
 } from './js/blocks.js';
 import {
@@ -18,7 +18,13 @@ import { createPlayer, EYE, playerAABB } from './js/player.js';
 import { createUI } from './js/ui.js';
 import { createNet } from './js/net.js';
 import { createAvatars } from './js/avatars.js';
-import { isTool, itemName, miningTime, drawToolIcon, TOOL_IDS } from './js/items.js';
+import {
+  isTool, isMaterial, itemName, miningTime, drawToolIcon,
+  attackDamage, blockDrop, toolDurability,
+} from './js/items.js';
+import { createInventory, HOTBAR_SIZE } from './js/inventory.js';
+import { RECIPES, canCraft, craft } from './js/crafting.js';
+import { createMobs } from './js/mobs.js';
 
 // ---------------------------------------------------------------------------
 // Saved state (position, hotbar, settings — block edits are saved in world.js)
@@ -30,14 +36,20 @@ try { saved = JSON.parse(localStorage.getItem(STATE_KEY)) || {}; } catch (e) { s
 let RENDER_DIST = clamp(saved.rd || 5, 2, 10);
 let timeOfDay = typeof saved.t === 'number' ? saved.t : 0.05;
 let selected = clamp(saved.sel || 0, 0, 8);
-const HOTBAR = Array.isArray(saved.hotbar) && saved.hotbar.length === 9 &&
-  saved.hotbar.every(id => BLOCKS[id] || isTool(id))
-  ? saved.hotbar.slice()
-  : DEFAULT_HOTBAR.slice();
-// One-time migration: give existing saves the tools in their last four slots
-if (!HOTBAR.some(isTool)) {
-  for (let i = 0; i < TOOL_IDS.length; i++) HOTBAR[5 + i] = TOOL_IDS[i];
+let creative = !!saved.creative;
+const MAX_HP = 20;
+let hp = typeof saved.hp === 'number' ? clamp(saved.hp, 0, MAX_HP) : MAX_HP;
+let invulnT = 0;      // damage i-frames
+let regenT = 0;       // time since last hurt (drives slow regen)
+
+const inventory = createInventory(saved.inv);
+// Migrate a pre-inventory save: pour the old 9-slot hotbar into the new bag.
+if (!Array.isArray(saved.inv) && Array.isArray(saved.hotbar)) {
+  for (const id of saved.hotbar) {
+    if (id && (BLOCKS[id] || isTool(id))) inventory.addItem(id, 1);
+  }
 }
+const heldId = () => { const s = inventory.get(selected); return s ? s.id : null; };
 setMuted(!!saved.muted);
 
 // ---------------------------------------------------------------------------
@@ -72,6 +84,7 @@ const materials = {
 const skyCtl = createSky(scene);
 const particles = createParticles(scene);
 const avatars = createAvatars(scene);
+const mobs = createMobs(scene);
 
 const highlight = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002)),
@@ -136,7 +149,8 @@ function toolMaterial(id) {
 }
 function refreshHand() {
   if (handMesh) { hand.remove(handMesh); handMesh.geometry.dispose(); handMesh = null; }
-  const id = HOTBAR[selected];
+  const id = heldId();
+  if (id == null || isMaterial(id)) return; // empty fist / non-visual item
   if (isTool(id)) {
     handMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), toolMaterial(id));
     handMesh.scale.setScalar(0.6);
@@ -175,22 +189,68 @@ function eyeInWater() {
 }
 
 // ---------------------------------------------------------------------------
+// Player health & damage
+// ---------------------------------------------------------------------------
+const hurtOverlay = document.getElementById('hurt-overlay');
+let fallPeakY = null; // highest point of the current fall, for fall damage
+
+function hurtPlayer(amount, fromX, fromZ) {
+  if (creative || invulnT > 0 || hp <= 0) return;
+  hp = Math.max(0, hp - amount);
+  invulnT = 0.5;
+  regenT = 0;
+  hurtOverlay.style.opacity = '0.45';
+  // Knock the player back/up away from the damage source.
+  if (fromX != null) {
+    const dx = player.pos.x - fromX, dz = player.pos.z - fromZ;
+    const len = Math.hypot(dx, dz) || 1;
+    player.vel.x += (dx / len) * 5;
+    player.vel.z += (dz / len) * 5;
+    if (!player.flying) player.vel.y = 6;
+  }
+  updateHearts();
+  if (hp <= 0) respawn();
+}
+
+function respawn() {
+  hp = MAX_HP;
+  invulnT = 1.5;
+  player.vel.set(0, 0, 0);
+  player.flying = false;
+  player.pos.set(8.5, heightAtSafe(8, 8), 8.5);
+  fallPeakY = null;
+  updateHearts();
+  saveState();
+}
+
+function heightAtSafe(x, z) {
+  // Spawn a little above the surface column.
+  for (let y = WORLD_H - 1; y > 1; y--) {
+    if (isSolid(getBlock(x, y, z))) return y + 1.2;
+  }
+  return SEA + 4;
+}
+
+// ---------------------------------------------------------------------------
 // UI
 // ---------------------------------------------------------------------------
 const ui = createUI({
   atlasCanvas: atlas.canvas,
-  hotbar: HOTBAR,
+  inventory,
   getSelected: () => selected,
-  onAssign(id) {
-    HOTBAR[selected] = id;
-    ui.refreshHotbar();
-    refreshHand();
-    closeInventory(true);
-    saveState();
-  },
+  getCreative: () => creative,
+  recipes: RECIPES,
+  canCraft: r => canCraft(inventory, r),
+  onCraft(r) { craft(inventory, r); playBlockSound(B.PLANK, 'place'); },
+  onToggleCreative() { creative = !creative; updateHearts(); saveState(); },
+  onChange() { refreshHand(); saveState(); },
   onBackdropClose: () => closeInventory(true),
 });
+function updateHearts() {
+  ui.setHealth(hp, MAX_HP, !creative);
+}
 refreshHand();
+updateHearts();
 
 function requestLock() {
   const p = canvas.requestPointerLock();
@@ -334,7 +394,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.code.startsWith('Digit')) {
     const n = parseInt(e.code.slice(5), 10);
-    if (n >= 1 && n <= HOTBAR.length) {
+    if (n >= 1 && n <= HOTBAR_SIZE) {
       selected = n - 1;
       ui.refreshHotbar();
       refreshHand();
@@ -346,7 +406,7 @@ document.addEventListener('keyup', e => { keys[e.code] = false; });
 
 document.addEventListener('wheel', e => {
   if (!locked) return;
-  selected = (selected + (e.deltaY > 0 ? 1 : -1) + HOTBAR.length) % HOTBAR.length;
+  selected = (selected + (e.deltaY > 0 ? 1 : -1) + HOTBAR_SIZE) % HOTBAR_SIZE;
   ui.refreshHotbar();
   refreshHand();
 });
@@ -362,6 +422,26 @@ function getLookDir() {
 let mineHeld = false;
 let mining = null; // { x, y, z, id, progress, total, tickTimer }
 
+// Collect a broken block's drop (no-op in creative — building stays free).
+function giveDrop(blockId) {
+  if (creative) return;
+  const d = blockDrop(blockId);
+  if (d) inventory.addItem(d.id, d.count);
+}
+
+// Wear down the held tool by one use; it snaps at zero.
+function wearTool() {
+  if (creative) return;
+  const s = inventory.get(selected);
+  if (!s || !isTool(s.id)) return;
+  s.dura = (s.dura == null ? toolDurability(s.id) : s.dura) - 1;
+  if (s.dura <= 0) {
+    inventory.set(selected, null);
+    playBlockSound(B.STONE, 'break');
+    refreshHand();
+  }
+}
+
 function breakBlock(hit) {
   // Refill with water if a neighbour is water, so lakes don't get dry holes
   const touchesWater =
@@ -373,18 +453,23 @@ function breakBlock(hit) {
   net.sendEdit(hit.x, hit.y, hit.z, fill);
   particles.burst(hit.x, hit.y, hit.z, tileColors[BLOCKS[hit.id].tiles[0]]);
   playBlockSound(hit.id, 'break');
+  giveDrop(hit.id);
+  wearTool();
   // Plants pop when their ground is removed
   const above = getBlock(hit.x, hit.y + 1, hit.z);
   if (BLOCKS[above] && BLOCKS[above].cross) {
     setBlock(hit.x, hit.y + 1, hit.z, AIR);
     net.sendEdit(hit.x, hit.y + 1, hit.z, AIR);
     particles.burst(hit.x, hit.y + 1, hit.z, tileColors[BLOCKS[above].tiles[0]], 8);
+    giveDrop(above);
   }
+  ui.refreshHotbar();
+  saveState();
 }
 
 function updateMining(dt, hit) {
   if (!mineHeld || !hit || BLOCKS[hit.id].unbreakable) { mining = null; return; }
-  const held = HOTBAR[selected];
+  const held = heldId();
   if (!mining || mining.x !== hit.x || mining.y !== hit.y || mining.z !== hit.z ||
       mining.id !== hit.id || mining.held !== held) {
     mining = {
@@ -412,6 +497,17 @@ document.addEventListener('mousedown', e => {
   const hit = raycast(camera.position, getLookDir(), REACH);
 
   if (e.button === 0) {
+    // Attack a mob if one is in front and closer than the targeted block.
+    const dir = getLookDir();
+    const picked = mobs.pickMob(camera.position, dir, 3.6);
+    const blockDist = hit
+      ? Math.hypot(hit.x + 0.5 - camera.position.x, hit.y + 0.5 - camera.position.y, hit.z + 0.5 - camera.position.z)
+      : Infinity;
+    if (picked && picked.dist < blockDist) {
+      mobs.damageMob(picked.mob, attackDamage(heldId()), player.pos.x, player.pos.z);
+      wearTool();
+      return;
+    }
     mineHeld = true;
     updateMining(0, hit); // instant blocks (plants) break on click
     return;
@@ -419,8 +515,9 @@ document.addEventListener('mousedown', e => {
   if (!hit) return;
 
   if (e.button === 2) {
-    const id = HOTBAR[selected];
-    if (isTool(id)) return; // tools can't be placed
+    const id = heldId();
+    if (id == null || isTool(id) || isMaterial(id)) return; // only blocks place
+    if (!creative && (inventory.get(selected)?.count || 0) <= 0) return;
     let px, py, pz;
     if (BLOCKS[hit.id].cross) {
       px = hit.x; py = hit.y; pz = hit.z; // placing into a plant replaces it
@@ -443,6 +540,12 @@ document.addEventListener('mousedown', e => {
     setBlock(px, py, pz, id);
     net.sendEdit(px, py, pz, id);
     playBlockSound(id, 'place');
+    if (!creative) {
+      inventory.removeOne(selected);
+      ui.refreshHotbar();
+      if (!inventory.get(selected)) refreshHand();
+      saveState();
+    }
   }
 });
 document.addEventListener('mouseup', e => {
@@ -503,7 +606,9 @@ function saveState() {
   const s = {
     rd: RENDER_DIST,
     sel: selected,
-    hotbar: HOTBAR,
+    inv: inventory.serialize(),
+    hp,
+    creative,
     muted: isMuted(),
     t: Math.round(timeOfDay * 1000) / 1000,
     pos: [
@@ -543,9 +648,35 @@ function animate() {
 
   if (locked || net.active) timeOfDay = (timeOfDay + dt / DAY_LENGTH) % 1;
   if (locked) {
+    const wasOnGround = player.onGround;
     const events = player.update(dt, keys);
     if (events.step) playBlockSound(events.step, 'step');
     if (events.land) playBlockSound(events.land, 'land');
+
+    // Fall damage: track the apex of a fall, hurt on landing past ~4 blocks.
+    if (!player.onGround && !player.flying && !player.inWater()) {
+      fallPeakY = fallPeakY == null ? player.pos.y : Math.max(fallPeakY, player.pos.y);
+    } else if (player.onGround) {
+      if (!wasOnGround && fallPeakY != null) {
+        const dist = fallPeakY - player.pos.y;
+        if (dist > 4) hurtPlayer(Math.floor(dist - 4));
+      }
+      fallPeakY = null;
+    }
+
+    // Health regen + i-frames
+    if (invulnT > 0) invulnT -= dt;
+    regenT += dt;
+    if (!creative && hp > 0 && hp < MAX_HP && regenT > 4) {
+      regenT = 2.5; hp = Math.min(MAX_HP, hp + 1); updateHearts();
+    }
+    if (parseFloat(hurtOverlay.style.opacity) > 0) {
+      hurtOverlay.style.opacity = String(Math.max(0, parseFloat(hurtOverlay.style.opacity) - dt * 1.8));
+    }
+
+    // Mobs hunt at night; they only act while you're in the world.
+    const night = timeOfDay >= 0.5;
+    mobs.update(dt, player, night, hurtPlayer);
   }
 
   avatars.update(dt);
@@ -583,7 +714,7 @@ function animate() {
   // Held-item swing: tools sweep a diagonal chop, blocks do a forward punch.
   // `a` rises 0→1→0 over the swing; `wind` biases the arc so it whips through
   // the low point rather than easing symmetrically (a meatier mining feel).
-  const usingTool = isTool(HOTBAR[selected]);
+  const usingTool = isTool(heldId());
   if (swingT > 0) {
     swingT = Math.max(0, swingT - dt);
     const p = 1 - swingT / SWING;
@@ -662,7 +793,7 @@ function animate() {
       `${fps} fps · ${RENDER_DIST} chunks` +
       `\nxyz ${player.pos.x.toFixed(1)} ${player.pos.y.toFixed(1)} ${player.pos.z.toFixed(1)}` +
       `\n${biome} · ${hh}:${mm}${isMuted() ? ' · muted' : ''}` +
-      `\n${itemName(HOTBAR[selected])}${player.flying ? ' · flying' : ''}` +
+      `\n${heldId() != null ? itemName(heldId()) : 'empty hand'}${creative ? ' · creative' : ''}${player.flying ? ' · flying' : ''}` +
       (net.active
         ? `\nroom ${net.code}${net.hosting ? ' (hosting)' : ''} · ${avatars.count() + 1} players`
         : '');
