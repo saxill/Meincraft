@@ -168,6 +168,46 @@
     position: absolute; right: 0; bottom: -2px; color: #fff;
     font: bold 13px monospace; text-shadow: 1px 1px 0 #000;
   }
+
+  /* companion bot chat */
+  #botlog {
+    position: fixed; left: 10px; bottom: 86px; z-index: 6; max-width: 420px;
+    font: 13px monospace; color: #e7d7ff; text-shadow: 1px 1px 0 #000;
+    pointer-events: none; display: flex; flex-direction: column; gap: 2px;
+  }
+  #botlog.hidden { display: none; }
+  #botlog .botline {
+    background: rgba(40, 20, 70, 0.45); padding: 2px 8px; border-radius: 4px;
+    width: fit-content;
+  }
+  #botchat {
+    position: fixed; left: 10px; bottom: 60px; z-index: 9; width: 420px;
+  }
+  #botchat.hidden { display: none; }
+  #botinput {
+    width: 100%; box-sizing: border-box; font: 14px monospace; padding: 8px 10px;
+    border-radius: 6px; border: 1px solid rgba(180,140,255,0.6);
+    background: rgba(20, 12, 34, 0.92); color: #fff;
+    user-select: text; -webkit-user-select: text;
+  }
+  #botinput::placeholder { color: #9d86c0; }
+
+  /* multiplayer join-approval banner (host side) */
+  #join-req {
+    position: fixed; left: 50%; top: 16px; transform: translateX(-50%);
+    z-index: 30; display: flex; gap: 10px; align-items: center;
+    background: rgba(20, 12, 34, 0.96); border: 1px solid rgba(180,140,255,0.6);
+    border-radius: 8px; padding: 10px 14px; color: #fff; font: 13px monospace;
+  }
+  #join-req.hidden { display: none; }
+  #join-req button {
+    font: 12px monospace; padding: 6px 12px; border-radius: 4px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.35); color: #fff;
+  }
+  #join-allow { background: #2f5e1f; }
+  #join-allow:hover { background: #3d7a29; }
+  #join-deny { background: #6e1f1f; }
+  #join-deny:hover { background: #8a2727; }
 </style>
 </head>
 <body>
@@ -178,6 +218,18 @@
   <div id="hud"></div>
   <canvas id="hearts" width="220" height="20"></canvas>
   <div id="hotbar"></div>
+
+  <div id="join-req" class="hidden">
+    <span id="join-req-text"></span>
+    <button id="join-allow">Allow</button>
+    <button id="join-deny">Deny</button>
+  </div>
+
+  <div id="botlog" class="hidden"></div>
+  <div id="botchat" class="hidden">
+    <input id="botinput" maxlength="120" autocomplete="off"
+           placeholder="talk to Zara… (follow · mine wood · fight · stop)  [Enter to send, Esc to cancel]">
+  </div>
 
   <div id="cursor-item"></div>
   <div id="inventory" class="hidden">
@@ -194,15 +246,17 @@
     <p>WASD — move &nbsp;·&nbsp; double-tap W — sprint &nbsp;·&nbsp; SPACE — jump / swim up &nbsp;·&nbsp; SHIFT — sneak / fly down</p>
     <p>LEFT CLICK — break block &nbsp;·&nbsp; RIGHT CLICK — place block &nbsp;·&nbsp; E — inventory</p>
     <p>1–9 / mouse wheel — select block &nbsp;·&nbsp; F — fly &nbsp;·&nbsp; M — mute &nbsp;·&nbsp; [ ] — view distance &nbsp;·&nbsp; ESC — pause</p>
+    <p>B — summon your companion <b>Zara</b> &nbsp;·&nbsp; T — talk to her (follow · mine wood · fight · stop)</p>
     <p>Your world and settings are saved automatically in this browser.</p>
     <div class="start">▶ click to play</div>
     <div class="mp" id="mp">
       <input id="mp-name" maxlength="16" placeholder="your name" autocomplete="off">
+      <input id="mp-pass" maxlength="24" type="password" placeholder="room password" autocomplete="off">
+      <input id="mp-code" maxlength="5" placeholder="room id (optional)" autocomplete="off">
       <button id="mp-host">HOST GAME</button>
       <span class="mp-sep">or</span>
-      <input id="mp-code" maxlength="5" placeholder="CODE" autocomplete="off">
       <button id="mp-join">JOIN</button>
-      <div id="mp-status">play with friends: host a room, or join with a friend's code</div>
+      <div id="mp-status">private room: set a password, host it, and approve who gets in. anyone joining needs the password AND your OK.</div>
     </div>
   </div>
 

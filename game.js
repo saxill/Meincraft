@@ -21,10 +21,12 @@ import { createAvatars } from './js/avatars.js';
 import {
   isTool, isMaterial, itemName, miningTime, drawToolIcon,
   attackDamage, blockDrop, toolDurability,
+  mobDrop, isFood, foodHeal,
 } from './js/items.js';
 import { createInventory, HOTBAR_SIZE } from './js/inventory.js';
 import { RECIPES, canCraft, craft } from './js/crafting.js';
 import { createMobs } from './js/mobs.js';
+import { createBot } from './js/bot.js';
 
 // ---------------------------------------------------------------------------
 // Saved state (position, hotbar, settings — block edits are saved in world.js)
@@ -174,6 +176,11 @@ if (Array.isArray(saved.pos) && saved.pos.length === 3) {
   player.pitch = saved.pitch || 0;
   player.flying = !!saved.flying;
 }
+// Respawn checkpoint: the last ground the player safely stood on. Updated as
+// you walk, persisted, and used by respawn() instead of the world origin.
+let spawnX = Array.isArray(saved.spawn) ? saved.spawn[0] : player.pos.x;
+let spawnZ = Array.isArray(saved.spawn) ? saved.spawn[1] : player.pos.z;
+let checkpointTimer = 0;
 
 let keys = {};
 let locked = false;
@@ -214,19 +221,27 @@ function hurtPlayer(amount, fromX, fromZ) {
 
 function respawn() {
   hp = MAX_HP;
-  invulnT = 1.5;
+  invulnT = 2.0;
   player.vel.set(0, 0, 0);
   player.flying = false;
-  player.pos.set(8.5, heightAtSafe(8, 8), 8.5);
+  // Respawn at the last checkpoint (the ground you were last safely standing
+  // on), not the world origin — so dying doesn't fling you across the map.
+  const sx = Math.floor(spawnX), sz = Math.floor(spawnZ);
+  player.pos.set(sx + 0.5, heightAtSafe(sx, sz), sz + 0.5);
   fallPeakY = null;
   updateHearts();
   saveState();
 }
 
 function heightAtSafe(x, z) {
-  // Spawn a little above the surface column.
-  for (let y = WORLD_H - 1; y > 1; y--) {
-    if (isSolid(getBlock(x, y, z))) return y + 1.2;
+  // Find a proper standing surface: a solid block (not foliage) with two
+  // blocks of air above it, scanning down from the sky.
+  for (let y = WORLD_H - 2; y > 1; y--) {
+    const here = getBlock(x, y, z);
+    if (isSolid(here) && here !== B.LEAVES &&
+        getBlock(x, y + 1, z) === AIR && getBlock(x, y + 2, z) === AIR) {
+      return y + 1.05;
+    }
   }
   return SEA + 4;
 }
@@ -274,9 +289,40 @@ function closeInventory(relock) {
 const mpStatus = document.getElementById('mp-status');
 const mpName = document.getElementById('mp-name');
 const mpCode = document.getElementById('mp-code');
+const mpPass = document.getElementById('mp-pass');
 const mpHostBtn = document.getElementById('mp-host');
 const mpJoinBtn = document.getElementById('mp-join');
 mpName.value = saved.name || '';
+
+// Host-side join approval. A would-be player must (1) supply the room password
+// AND (2) be approved here before they receive any world data. We deliberately
+// never persist the password (it's not written to the save).
+const joinReqEl = document.getElementById('join-req');
+const joinReqText = document.getElementById('join-req-text');
+const joinAllowBtn = document.getElementById('join-allow');
+const joinDenyBtn = document.getElementById('join-deny');
+const joinQueue = [];
+let joinCurrent = null;
+function showNextJoinRequest() {
+  joinCurrent = joinQueue.shift() || null;
+  if (!joinCurrent) { joinReqEl.classList.add('hidden'); return; }
+  // textContent only — a joiner's name is never rendered as markup.
+  joinReqText.textContent = `"${joinCurrent.name}" wants to join your room — allow?`;
+  joinReqEl.classList.remove('hidden');
+  if (locked) document.exitPointerLock();
+}
+function queueJoinRequest(name, peerId, decide) {
+  joinQueue.push({ name, decide });
+  if (!joinCurrent) showNextJoinRequest();
+}
+function answerJoin(ok) {
+  const j = joinCurrent;
+  joinCurrent = null;
+  if (j) { try { j.decide(ok); } catch (e) {} }
+  showNextJoinRequest();
+}
+joinAllowBtn.addEventListener('click', e => { e.stopPropagation(); answerJoin(true); });
+joinDenyBtn.addEventListener('click', e => { e.stopPropagation(); answerJoin(false); });
 
 function playerName() {
   return (mpName.value.trim() || 'player' + Math.floor(Math.random() * 900 + 100)).slice(0, 16);
@@ -297,6 +343,14 @@ const net = createNet({
   name: playerName,
   getTime: () => timeOfDay,
   getEdits: getAllEdits,
+  // Host-side access control: the current room password + the approve/deny gate.
+  getPassword: () => mpPass.value,
+  approveJoin: (name, peerId, decide) => queueJoinRequest(name, peerId, decide),
+  onDenied(reason) {
+    mpStatus.textContent = 'join denied: ' + reason;
+    mpHostBtn.disabled = false;
+    mpJoinBtn.disabled = false;
+  },
   onStatus(text) { mpStatus.textContent = text; },
   onInit(msg) {
     // We're now in the host's world: adopt their edits and clock, never
@@ -332,17 +386,84 @@ for (const ev of ['click', 'mousedown', 'mouseup']) {
 }
 mpName.addEventListener('click', () => mpName.focus());
 mpCode.addEventListener('click', () => mpCode.focus());
+mpPass.addEventListener('click', () => mpPass.focus());
 mpHostBtn.addEventListener('click', () => {
   saveState();
-  net.host();
+  net.host(mpCode.value);            // optional fixed room id
   mpHostBtn.disabled = true;
   mpJoinBtn.disabled = true;
 });
 mpJoinBtn.addEventListener('click', () => {
   saveState();
-  net.join(mpCode.value);
+  net.join(mpCode.value, mpPass.value);   // code + password
   mpHostBtn.disabled = true;
   mpJoinBtn.disabled = true;
+});
+
+// ---------------------------------------------------------------------------
+// Companion bot "Zara" — a local player-shaped helper (no server, no API key).
+// Summon with B, talk to it with T. See js/bot.js.
+// ---------------------------------------------------------------------------
+const botChat = document.getElementById('botchat');
+const botLog = document.getElementById('botlog');
+const botInput = document.getElementById('botinput');
+
+// Append a line to the companion log via textContent only (never innerHTML) so
+// nothing the bot or user "says" can inject markup.
+function botSay(text) {
+  const line = document.createElement('div');
+  line.className = 'botline';
+  line.textContent = 'Zara: ' + text;
+  botLog.appendChild(line);
+  while (botLog.children.length > 6) botLog.removeChild(botLog.firstChild);
+  botLog.classList.remove('hidden');
+  clearTimeout(botSay._fade);
+  botSay._fade = setTimeout(() => botLog.classList.add('hidden'), 7000);
+}
+
+const bot = createBot(scene, {
+  name: 'Zara',
+  say: botSay,
+  onEdit: (x, y, z, id) => net.sendEdit(x, y, z, id),
+  onBreak: (x, y, z, id) => {
+    if (BLOCKS[id]) particles.burst(x, y, z, tileColors[BLOCKS[id].tiles[0]]);
+    const d = Math.hypot(x - player.pos.x, y - player.pos.y, z - player.pos.z);
+    if (d < 24) playBlockSound(id, 'break');
+    giveDrop(id); // the companion hands what it mines to you
+    ui.refreshHotbar();
+    saveState();
+  },
+  getMobs: () => mobs.mobs,
+  damageMob: (mob, dmg, fx, fz) => mobs.damageMob(mob, dmg, fx, fz),
+  onKill: (type) => {
+    const drop = mobDrop(type);
+    if (drop && !creative) { inventory.addItem(drop.id, drop.count); ui.refreshHotbar(); saveState(); }
+  },
+});
+
+function openBotChat() {
+  if (!locked || ui.inventoryOpen()) return;
+  botChat.classList.remove('hidden');
+  botLog.classList.remove('hidden');
+  document.getElementById('overlay').classList.add('hidden');
+  if (locked) document.exitPointerLock();
+  botInput.value = '';
+  setTimeout(() => botInput.focus(), 0);
+}
+function closeBotChat(relock) {
+  botChat.classList.add('hidden');
+  botInput.value = '';
+  if (relock) requestLock();
+}
+botInput.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.code === 'Enter') {
+    const v = botInput.value;
+    closeBotChat(true);
+    if (v.trim()) bot.command(v);
+  } else if (e.code === 'Escape') {
+    closeBotChat(true);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -357,6 +478,11 @@ document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
   if (!locked) keys = {};
   ui.syncOverlay(locked);
+  // Talking to the companion drops pointer lock on purpose — keep the
+  // click-to-play overlay hidden so the chat box stays usable.
+  if (!botChat.classList.contains('hidden')) {
+    document.getElementById('overlay').classList.add('hidden');
+  }
 });
 
 document.addEventListener('mousemove', e => {
@@ -385,6 +511,8 @@ document.addEventListener('keydown', e => {
     setMuted(!isMuted());
     saveState();
   }
+  if (e.code === 'KeyB') bot.toggle(player);
+  if (e.code === 'KeyT') { openBotChat(); return; }
   if (e.code === 'BracketLeft') setRenderDist(RENDER_DIST - 1);
   if (e.code === 'BracketRight') setRenderDist(RENDER_DIST + 1);
   if (e.code === 'KeyW' && !e.repeat) {
@@ -504,12 +632,34 @@ document.addEventListener('mousedown', e => {
       ? Math.hypot(hit.x + 0.5 - camera.position.x, hit.y + 0.5 - camera.position.y, hit.z + 0.5 - camera.position.z)
       : Infinity;
     if (picked && picked.dist < blockDist) {
-      mobs.damageMob(picked.mob, attackDamage(heldId()), player.pos.x, player.pos.z);
+      const killed = mobs.damageMob(picked.mob, attackDamage(heldId()), player.pos.x, player.pos.z);
       wearTool();
+      if (killed && !creative) {
+        const drop = mobDrop(picked.mob.type);
+        if (drop && drop.count > 0) {
+          inventory.addItem(drop.id, drop.count);
+          ui.refreshHotbar();
+          saveState();
+        }
+      }
       return;
     }
     mineHeld = true;
     updateMining(0, hit); // instant blocks (plants) break on click
+    return;
+  }
+
+  // Right-click to eat held food (works whether or not a block is targeted).
+  if (e.button === 2 && isFood(heldId())) {
+    if (!creative && hp < MAX_HP && (inventory.get(selected)?.count || 0) > 0) {
+      hp = Math.min(MAX_HP, hp + foodHeal(heldId()));
+      inventory.removeOne(selected);
+      updateHearts();
+      ui.refreshHotbar();
+      if (!inventory.get(selected)) refreshHand();
+      playBlockSound(B.GRASS, 'step'); // soft munch
+      saveState();
+    }
     return;
   }
   if (!hit) return;
@@ -609,6 +759,7 @@ function saveState() {
     inv: inventory.serialize(),
     hp,
     creative,
+    spawn: [Math.round(spawnX * 100) / 100, Math.round(spawnZ * 100) / 100],
     muted: isMuted(),
     t: Math.round(timeOfDay * 1000) / 1000,
     pos: [
@@ -664,6 +815,14 @@ function animate() {
       fallPeakY = null;
     }
 
+    // Update the respawn checkpoint while standing safely on dry ground.
+    checkpointTimer -= dt;
+    if (checkpointTimer <= 0 && player.onGround && !player.inWater() && hp > 0) {
+      checkpointTimer = 1.0;
+      spawnX = player.pos.x;
+      spawnZ = player.pos.z;
+    }
+
     // Health regen + i-frames
     if (invulnT > 0) invulnT -= dt;
     regenT += dt;
@@ -677,6 +836,9 @@ function animate() {
     // Mobs hunt at night; they only act while you're in the world.
     const night = timeOfDay >= 0.5;
     mobs.update(dt, player, night, hurtPlayer);
+
+    // Companion bot acts alongside the player (no-op until summoned with B).
+    bot.update(dt, player);
   }
 
   avatars.update(dt);

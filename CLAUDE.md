@@ -33,7 +33,7 @@ js/sky.js       sun, moon, stars, clouds, day/night lighting
 js/particles.js block-break particle bursts
 js/audio.js     procedural sound effects
 js/ui.js        hotbar, inventory screen (click-to-move), crafting list, hearts, creative palette
-js/net.js       multiplayer rooms (WebRTC / PeerJS, host-relayed)
+js/net.js       multiplayer rooms (WebRTC / PeerJS, host-relayed) + room-password & host-approval join gate
 js/avatars.js   remote player box models with name tags — REUSABLE for a bot's body
 js/items.js     tools, durability, attack damage, block drops, item/tool icons
 js/inventory.js stacking 36-slot inventory model (9 hotbar + 27 main)
@@ -61,7 +61,30 @@ js/mobs.js      pigs & zombies — AABB physics, wander/chase AI, combat — REU
 Goal: a player-shaped agent that joins the world, follows/helps you, mines, builds, and fights mobs.
 Recommended phased build — Phase 1 stands alone and needs nothing external.
 
-## Phase 1 — local "bot companion" (no server, no API key) ← do this first
+## Phase 1 — local "bot companion" (no server, no API key) ✅ BUILT (`js/bot.js`)
+A companion named **Zara** you summon with **B** and talk to with **T**. It reuses the
+mob voxel-AABB physics (gravity, `moveAxis`, 1-block step-hop) and an avatar-style body
+with a name tag, walk-cycle legs, and a mining arm swing. State machine:
+`follow` (default, keeps ~3 blocks), `come`, `wander`, `stop`, `mine <block>`
+(finds the nearest matching block within radius 6, walks to it, breaks it, hands the
+drop to the player — capped at 16 blocks/command with a 5s stuck-skip), and `fight`
+(chases the nearest hostile within 18 and attacks). Its block edits go through the
+player's own `setBlock` + `net.sendEdit` path so they save and sync.
+
+Chat commands (`bot.command`) are a **fixed keyword allowlist** parsed with regexes —
+follow/come/stop/wander/fight and `mine wood|stone|dirt|sand|coal|iron|gold|diamond`.
+Wired in `game.js` (creation after the net setup; `bot.update(dt, player)` in `animate()`
+inside the `locked` block; B/T key handlers; `#botchat`/`#botlog` in `index.html`).
+
+**Security (Phase 1):** 100% local — no network calls, no API key, no secrets, no
+`eval`/`Function`. User chat is never executed as code; all chat text reaches the DOM
+via `textContent` only (no `innerHTML`), input is length-capped (120), and the bot adds
+no new `net.js` message types or save-shape changes (it's resummoned each session, not
+persisted). Verified: `node --check` clean on all files + headless-Chrome smoke test
+(9 hotbar slots, no Uncaught/TypeError/ReferenceError). The API-key surface only appears
+in Phase 2 below — keep it out of Phase 1.
+
+Original notes (for reference / future generalisation):
 A bot is essentially "a mob that looks like a player and can also mine/place." Reuse what exists:
 - **Body/rendering:** reuse `js/avatars.js`'s box model + name tag (give it its own colour/name).
 - **Physics/AI loop:** copy the `moveAxis`/gravity/step-hop pattern from `js/mobs.js` (or generalize it

@@ -40,16 +40,39 @@ export function createNet(h) {
       if (!msg || typeof msg !== 'object') return;
       if (msg.t === 'hello') {
         const name = String(msg.name || 'player').slice(0, 16);
-        const others = [...conns].map(([id, c]) => ({ id, name: c.name }));
-        others.push({ id: 'host', name: h.name() });
-        conns.set(conn.peer, { conn, name });
-        conn.send({ t: 'init', edits: h.getEdits(), time: h.getTime(), players: others });
-        broadcast({ t: 'join', id: conn.peer, name }, conn.peer);
-        h.onJoin(conn.peer, name);
+        // 1) PASSWORD GATE — reject before a single byte of world data is sent.
+        //    (hello travels over the WebRTC data channel, which is DTLS-
+        //    encrypted, so the password isn't exposed on the wire.)
+        const pass = h.getPassword ? String(h.getPassword() || '') : '';
+        if (pass && String(msg.pass || '') !== pass) {
+          try { conn.send({ t: 'denied', reason: 'wrong password' }); } catch (e) {}
+          setTimeout(() => { try { conn.close(); } catch (e) {} }, 250);
+          return;
+        }
+        // 2) HOST APPROVAL — the joiner is admitted (and the world is sent)
+        //    ONLY after the host explicitly allows the request. Until then
+        //    they get nothing, and any edit/pos they send is ignored.
+        const admit = () => {
+          if (conns.has(conn.peer)) return;
+          const others = [...conns].map(([id, c]) => ({ id, name: c.name }));
+          others.push({ id: 'host', name: h.name() });
+          conns.set(conn.peer, { conn, name });
+          conn.send({ t: 'init', edits: h.getEdits(), time: h.getTime(), players: others });
+          broadcast({ t: 'join', id: conn.peer, name }, conn.peer);
+          h.onJoin(conn.peer, name);
+        };
+        const reject = () => {
+          try { conn.send({ t: 'denied', reason: 'host denied the request' }); } catch (e) {}
+          setTimeout(() => { try { conn.close(); } catch (e) {} }, 250);
+        };
+        if (h.approveJoin) h.approveJoin(name, conn.peer, ok => (ok ? admit() : reject()));
+        else admit();
       } else if (msg.t === 'edit') {
+        if (!conns.has(conn.peer)) return;   // un-admitted peer: ignore
         h.onEdit(msg);
         broadcast(msg, conn.peer);
       } else if (msg.t === 'pos') {
+        if (!conns.has(conn.peer)) return;   // un-admitted peer: ignore
         const p = { t: 'pos', id: conn.peer, x: msg.x, y: msg.y, z: msg.z, yaw: msg.yaw };
         h.onPos(p);
         broadcast(p, conn.peer);
@@ -64,9 +87,12 @@ export function createNet(h) {
     conn.on('error', drop);
   }
 
-  net.host = function () {
+  net.host = function (customCode) {
     if (peer) return;
-    const code = randomCode();
+    // Optional fixed room id (3–5 chars) so it can be "your" room every time;
+    // otherwise a random code.
+    const clean = String(customCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+    const code = clean.length >= 3 ? clean : randomCode();
     h.onStatus('starting room…');
     peer = new Peer(roomId(code));
     peer.on('open', () => {
@@ -87,10 +113,11 @@ export function createNet(h) {
     });
   };
 
-  net.join = function (code) {
+  net.join = function (code, password) {
     if (peer) return;
-    code = String(code || '').toUpperCase().trim();
-    if (code.length !== 5) { h.onStatus('enter the 5-letter room code'); return; }
+    code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+    if (code.length < 3) { h.onStatus('enter the room code'); return; }
+    const pass = String(password || '');
     h.onStatus('connecting to ' + code + '…');
     peer = new Peer();
     peer.on('error', err => {
@@ -100,10 +127,18 @@ export function createNet(h) {
       const conn = peer.connect(roomId(code), { reliable: true });
       conn.on('open', () => {
         conns.set('host', { conn, name: 'host' });
-        conn.send({ t: 'hello', name: h.name() });
+        conn.send({ t: 'hello', name: h.name(), pass });
+        h.onStatus('waiting for the host to let you in…');
       });
       conn.on('data', msg => {
         if (!msg || typeof msg !== 'object') return;
+        if (msg.t === 'denied') {
+          try { peer.destroy(); } catch (e) {}
+          peer = null;
+          net.active = false;
+          if (h.onDenied) h.onDenied(msg.reason || 'denied');
+          return;
+        }
         if (msg.t === 'init') {
           net.active = true;
           net.code = code;

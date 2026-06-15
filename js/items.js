@@ -14,11 +14,28 @@ export const SHOVEL = 102;
 export const SWORD = 103;
 export const TOOL_IDS = [PICKAXE, AXE, SHOVEL, SWORD];
 
-// Non-placeable crafting materials
+// Non-placeable crafting materials + mob loot / food
 export const STICK = 200;
+export const PORK = 201;   // raw porkchop (pig drop)
+export const ROTTEN = 202; // rotten flesh (zombie drop)
 export const MATERIALS = {
-  [STICK]: { name: 'Stick' },
+  [STICK]:  { name: 'Stick' },
+  [PORK]:   { name: 'Raw Porkchop' },
+  [ROTTEN]: { name: 'Rotten Flesh' },
 };
+
+// Edible items: id -> HP restored when eaten (right-click). No hunger system,
+// so food simply heals.
+const FOOD = { [PORK]: 5, [ROTTEN]: 2 };
+export const isFood = id => id in FOOD;
+export const foodHeal = id => FOOD[id] || 0;
+
+// What a mob drops when killed in survival. null = nothing.
+export function mobDrop(type) {
+  if (type === 'pig')    return { id: PORK, count: 1 + Math.floor(Math.random() * 2) }; // 1–2
+  if (type === 'zombie') return { id: ROTTEN, count: 1 };
+  return null;
+}
 
 export const TOOLS = {
   [PICKAXE]: { name: 'Pickaxe', head: '#b8c4d2' },
@@ -67,6 +84,10 @@ const HARDNESS = {
   [B.BRICK]: 2.4,
 };
 
+// Hard blocks that really want a tool: mining these bare-handed is slow and
+// miserable, which is what makes the matching tool feel sharp.
+const NEEDS_TOOL = new Set([B.STONE, B.COBBLE, B.BRICK, B.COAL, B.IRON, B.GOLD, B.DIAMOND]);
+
 // Seconds to break `blockId` while holding `heldId` (block, tool, or nothing)
 export function miningTime(blockId, heldId) {
   const block = BLOCKS[blockId];
@@ -74,7 +95,8 @@ export function miningTime(blockId, heldId) {
   if (block.cross) return 0;
   let t = HARDNESS[blockId] !== undefined ? HARDNESS[blockId] : 1;
   const eff = EFFECTIVE[heldId];
-  if (eff && eff.has(blockId)) t *= 0.27;
+  if (eff && eff.has(blockId)) t *= 0.16;        // right tool: crisp and fast
+  else if (NEEDS_TOOL.has(blockId)) t *= 2.6;    // bare hands on rock/ore: a slog
   return t;
 }
 
@@ -184,11 +206,45 @@ const MATERIAL_ART = {
     '.hk.........',
     'hk..........',
   ],
+  // p = raw meat, k = darker meat edge, b = bone
+  [PORK]: [
+    '............',
+    '...ppppp....',
+    '..ppppppp...',
+    '..ppppppkb..',
+    '.pppppppkb..',
+    '.ppppppppk..',
+    '.ppppppppk..',
+    '..pppppppk..',
+    '..kppppppk..',
+    '...kkkkkk...',
+    '............',
+    '............',
+  ],
+  // r = sickly flesh, k = darker edge
+  [ROTTEN]: [
+    '............',
+    '...rrkr.....',
+    '..rrrrrrk...',
+    '.rrkrrrrr...',
+    '.rrrrrkrrk..',
+    '.rrrrrrrrk..',
+    '..rrkrrrrk..',
+    '..rrrrrkk...',
+    '...krrrk....',
+    '....kkk.....',
+    '............',
+    '............',
+  ],
 };
 
 export function drawMaterialIcon(ctx, id) {
   const art = MATERIAL_ART[id];
-  const colors = { h: '#8a6233', k: '#5c3d23' };
+  const colors = {
+    h: '#8a6233', k: '#5c3d23',
+    p: '#e07a82', b: '#efe6d2',           // raw pork + bone
+    r: '#7a9a5c',                          // rotten flesh
+  };
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, 48, 48);
   ctx.imageSmoothingEnabled = false;

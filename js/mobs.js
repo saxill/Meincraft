@@ -15,34 +15,80 @@ const TYPES = {
   zombie: { w: 0.6, h: 1.9, maxHp: 20, speed: 2.7,  hostile: true  },
 };
 
-function box(w, h, d, color, shade) {
-  const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(shade) });
-  return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+// A coloured box that remembers its base colour, so we can flash it red on
+// hit and restore it afterwards.
+function box(w, h, d, color, shade = 1) {
+  const base = new THREE.Color(color).multiplyScalar(shade);
+  const mat = new THREE.MeshBasicMaterial({ color: base.clone() });
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.userData.base = base;
+  return m;
+}
+
+// A limb that pivots from its top joint, so it can swing while walking.
+// `px,py,pz` is the joint position; the limb hangs `h` below it.
+function limb(w, h, d, color, shade, px, py, pz) {
+  const grp = new THREE.Group();
+  grp.position.set(px, py, pz);
+  const m = box(w, h, d, color, shade);
+  m.position.y = -h / 2;
+  grp.add(m);
+  return grp;
 }
 
 function buildModel(type) {
   const g = new THREE.Group();
+  const legs = [];
+  const arms = [];
+
   if (type === 'pig') {
-    const body = box(0.55, 0.5, 0.95, 0xe89aa6, 1.0); body.position.set(0, 0.45, 0);
-    const head = box(0.45, 0.42, 0.4, 0xefb0bb, 1.0); head.position.set(0, 0.5, -0.62);
-    const snout = box(0.22, 0.18, 0.1, 0xd98494, 1.0); snout.position.set(0, 0.44, -0.85);
-    for (const [dx, dz] of [[-0.18, -0.3], [0.18, -0.3], [-0.18, 0.3], [0.18, 0.3]]) {
-      const leg = box(0.18, 0.3, 0.18, 0xcf8090, 0.85); leg.position.set(dx, 0.15, dz); g.add(leg);
-    }
+    const PINK = 0xf2a6b3, PINK_D = 0xe089a0, SNOUT = 0xd9788f, HOOF = 0x6b3b46;
+    const body = box(0.62, 0.56, 1.0, PINK);  body.position.set(0, 0.58, 0.04);
+    const head = box(0.5, 0.48, 0.44, PINK);  head.position.set(0, 0.62, -0.62);
+    const snout = box(0.28, 0.22, 0.12, SNOUT); snout.position.set(0, 0.54, -0.88);
     g.add(body, head, snout);
-  } else {
-    const legs = box(0.5, 0.85, 0.3, 0x2f6b2f, 0.7);  legs.position.y = 0.42;
-    const body = box(0.55, 0.7, 0.32, 0x3f7d3f, 0.95); body.position.y = 1.15;
-    const head = box(0.5, 0.5, 0.5, 0x5a8f5a, 1.0);    head.position.y = 1.7;
-    const arms = box(0.7, 0.25, 0.28, 0x3f7d3f, 0.9);  arms.position.set(0, 1.35, -0.28);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111811 });
-    for (const dx of [-0.12, 0.12]) {
-      const e = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.02), eyeMat);
-      e.position.set(dx, 1.74, -0.26); g.add(e);
+    // nostrils
+    for (const dx of [-0.06, 0.06]) {
+      const n = box(0.05, 0.07, 0.03, 0x7a3b4a); n.position.set(dx, 0.54, -0.945); g.add(n);
     }
-    g.add(legs, body, head, arms);
+    // eyes
+    for (const dx of [-0.14, 0.14]) {
+      const e = box(0.08, 0.1, 0.03, 0x1b1014); e.position.set(dx, 0.7, -0.845); g.add(e);
+    }
+    // ears
+    for (const dx of [-0.17, 0.17]) {
+      const ear = box(0.14, 0.14, 0.06, PINK_D); ear.position.set(dx, 0.9, -0.5);
+      ear.rotation.x = -0.3; g.add(ear);
+    }
+    // legs (swing while walking)
+    const lp = [[-0.2, -0.32], [0.2, -0.32], [-0.2, 0.34], [0.2, 0.34]];
+    for (const [dx, dz] of lp) {
+      const l = limb(0.18, 0.34, 0.18, HOOF, 1, dx, 0.34, dz);
+      legs.push(l); g.add(l);
+    }
+  } else { // zombie
+    const SKIN = 0x6aa84f, SKIN_D = 0x5c9444, SHIRT = 0x2f6f63, PANTS = 0x44506b;
+    const body = box(0.5, 0.6, 0.28, SHIRT);  body.position.y = 1.18;
+    const head = box(0.5, 0.5, 0.5, SKIN);    head.position.set(0, 1.73, 0);
+    g.add(body, head);
+    // sunken eyes + mouth
+    for (const dx of [-0.13, 0.13]) {
+      const e = box(0.12, 0.1, 0.03, 0x101510); e.position.set(dx, 1.78, -0.255); g.add(e);
+    }
+    const mouth = box(0.26, 0.06, 0.03, 0x1c2a18); mouth.position.set(0, 1.6, -0.255); g.add(mouth);
+    // arms outstretched forward (classic zombie), swing slightly
+    for (const dx of [-0.34, 0.34]) {
+      const a = limb(0.18, 0.6, 0.22, SKIN_D, 1, dx, 1.45, -0.04);
+      a.rotation.x = -1.45;            // reach forward
+      arms.push(a); g.add(a);
+    }
+    // two legs (swing while walking)
+    for (const dx of [-0.13, 0.13]) {
+      const l = limb(0.22, 0.85, 0.26, PANTS, 1, dx, 0.85, 0);
+      legs.push(l); g.add(l);
+    }
   }
-  return g;
+  return { group: g, legs, arms };
 }
 
 function makeHealthBar() {
@@ -99,11 +145,14 @@ export function createMobs(scene) {
 
   function spawn(type, x, y, z) {
     const def = TYPES[type];
-    const group = buildModel(type);
+    const model = buildModel(type);
+    const group = model.group;
     const hb = makeHealthBar();
     hb.sprite.position.y = def.h + 0.35;
     group.add(hb.sprite);
     scene.add(group);
+    const skin = [];
+    group.traverse(o => { if (o.isMesh && o.userData.base) skin.push(o); });
     const mob = {
       type, w: def.w, h: def.h, hostile: def.hostile, speed: def.speed,
       hp: def.maxHp, maxHp: def.maxHp,
@@ -111,6 +160,7 @@ export function createMobs(scene) {
       yaw: Math.random() * Math.PI * 2, onGround: false,
       wanderTimer: 0, wanderYaw: Math.random() * Math.PI * 2, moving: false,
       attackCd: 0, hurtT: 0, group, hb,
+      legs: model.legs, arms: model.arms, skin, walkPhase: Math.random() * 6.28,
     };
     mobs.push(mob);
   }
@@ -256,11 +306,32 @@ export function createMobs(scene) {
         }
 
         // --- visuals ---
-        if (mob.hurtT > 0) mob.hurtT -= dt;
         mob.group.position.copy(mob.pos);
         mob.group.rotation.y = mob.yaw;
-        // Cheap hurt feedback: puff up briefly when struck.
-        mob.group.scale.setScalar(mob.hurtT > 0 ? 1.12 : 1);
+
+        // Walk cycle: swing legs (and the zombie's arms) when actually moving.
+        const hSpeed = Math.hypot(mob.vel.x, mob.vel.z);
+        if (mob.moving && hSpeed > 0.3 && mob.onGround) {
+          mob.walkPhase += dt * (6 + hSpeed * 1.5);
+        }
+        const swing = (mob.moving && mob.onGround) ? Math.sin(mob.walkPhase) * 0.6 : 0;
+        for (let li = 0; li < mob.legs.length; li++) {
+          mob.legs[li].rotation.x = (li % 2 === 0 ? swing : -swing);
+        }
+        for (const a of mob.arms) {
+          a.rotation.x = -1.45 + Math.sin(mob.walkPhase) * 0.12; // small reaching sway
+        }
+
+        // Hit feedback: flash the whole body red and puff up briefly.
+        if (mob.hurtT > 0) {
+          mob.hurtT -= dt;
+          for (const m of mob.skin) m.material.color.setRGB(1, 0.25, 0.2);
+          mob.group.scale.setScalar(1.12);
+        } else if (mob.wasHurt) {
+          for (const m of mob.skin) m.material.color.copy(m.userData.base);
+          mob.group.scale.setScalar(1);
+        }
+        mob.wasHurt = mob.hurtT > 0;
       }
     },
   };
